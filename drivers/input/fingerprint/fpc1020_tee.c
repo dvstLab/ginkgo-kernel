@@ -62,7 +62,7 @@
 static struct proc_dir_entry *proc_entry;
 extern int fpsensor;
 
-static const char * const pctl_names[] = {
+static const char * pctl_names[] = {
 	"fpc1020_reset_reset",
 	"fpc1020_reset_active",
 	"fpc1020_irq_active",
