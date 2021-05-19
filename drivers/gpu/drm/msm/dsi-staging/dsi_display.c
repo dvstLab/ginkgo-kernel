@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -31,6 +31,7 @@
 #include "dsi_pwr.h"
 #include "sde_dbg.h"
 #include "dsi_parser.h"
+#include "dsi_phy.h"
 
 #define to_dsi_display(x) container_of(x, struct dsi_display, host)
 #define INT_BASE_10 10
@@ -467,23 +468,6 @@ error:
 	pr_warn("Unable to register for TE IRQ\n");
 	if (display->panel->esd_config.status_mode == ESD_MODE_PANEL_TE)
 		display->panel->esd_config.esd_enabled = false;
-}
-
-static bool dsi_display_is_te_based_esd(struct dsi_display *display)
-{
-	u32 status_mode = 0;
-
-	if (!display->panel) {
-		pr_err("Invalid panel data\n");
-		return false;
-	}
-
-	status_mode = display->panel->esd_config.status_mode;
-
-	if (status_mode == ESD_MODE_PANEL_TE &&
-			gpio_is_valid(display->disp_te_gpio))
-		return true;
-	return false;
 }
 
 /* Allocate memory for cmd dma tx buffer */
@@ -1107,6 +1091,25 @@ int dsi_display_set_power(struct drm_connector *connector,
 	return rc;
 }
 
+#ifdef CONFIG_DEBUG_FS
+static bool dsi_display_is_te_based_esd(struct dsi_display *display)
+{
+	u32 status_mode = 0;
+
+	if (!display->panel) {
+		pr_err("Invalid panel data\n");
+		return false;
+	}
+
+	status_mode = display->panel->esd_config.status_mode;
+
+	if (status_mode == ESD_MODE_PANEL_TE &&
+				gpio_is_valid(display->disp_te_gpio))
+		return true;
+
+	return false;
+}
+
 static ssize_t debugfs_dump_info_read(struct file *file,
 				      char __user *user_buf,
 				      size_t user_len,
@@ -1654,6 +1657,17 @@ static int dsi_display_debugfs_deinit(struct dsi_display *display)
 
 	return 0;
 }
+
+#else
+static int dsi_display_debugfs_init(struct dsi_display *display)
+{
+	return 0;
+}
+static int dsi_display_debugfs_deinit(struct dsi_display *display)
+{
+	return 0;
+}
+#endif /* CONFIG_DEBUG_FS */
 
 static void adjust_timing_by_ctrl_count(const struct dsi_display *display,
 					struct dsi_display_mode *mode)
@@ -4010,18 +4024,19 @@ static void _dsi_display_calc_pipe_delay(struct dsi_display *display,
 	struct dsi_display_ctrl *m_ctrl;
 	struct dsi_ctrl *dsi_ctrl;
 	struct dsi_phy_cfg *cfg;
+	int phy_ver;
 
 	m_ctrl = &display->ctrl[display->clk_master_idx];
 	dsi_ctrl = m_ctrl->ctrl;
 
 	cfg = &(m_ctrl->phy->cfg);
 
-	esc_clk_rate_hz = dsi_ctrl->clk_freq.esc_clk_rate * 1000;
-	pclk_to_esc_ratio = ((dsi_ctrl->clk_freq.pix_clk_rate * 1000) /
+	esc_clk_rate_hz = dsi_ctrl->clk_freq.esc_clk_rate;
+	pclk_to_esc_ratio = (dsi_ctrl->clk_freq.pix_clk_rate /
 			     esc_clk_rate_hz);
-	byte_to_esc_ratio = ((dsi_ctrl->clk_freq.byte_clk_rate * 1000) /
+	byte_to_esc_ratio = (dsi_ctrl->clk_freq.byte_clk_rate /
 			     esc_clk_rate_hz);
-	hr_bit_to_esc_ratio = ((dsi_ctrl->clk_freq.byte_clk_rate * 4 * 1000) /
+	hr_bit_to_esc_ratio = ((dsi_ctrl->clk_freq.byte_clk_rate * 4) /
 					esc_clk_rate_hz);
 
 	hsync_period = DSI_H_TOTAL_DSC(&mode->timing);
@@ -4047,8 +4062,17 @@ static void _dsi_display_calc_pipe_delay(struct dsi_display *display,
 			  ((cfg->timing.lane_v3[4] >> 1) + 1)) /
 			 hr_bit_to_esc_ratio);
 
-	/* 130 us pll delay recommended by h/w doc */
-	delay->pll_delay = ((130 * esc_clk_rate_hz) / 1000000) * 2;
+	/*
+	 *100us pll delay recommended for phy ver 2.0 and 3.0
+	 *25us pll delay recommended for phy ver 4.0
+	 */
+	phy_ver = dsi_phy_get_version(m_ctrl->phy);
+	if (phy_ver <= DSI_PHY_VERSION_3_0)
+		delay->pll_delay = 100;
+	else
+		delay->pll_delay = 25;
+
+	delay->pll_delay = (delay->pll_delay * esc_clk_rate_hz) / 1000000;
 }
 
 static int _dsi_display_dyn_update_clks(struct dsi_display *display,
@@ -6058,8 +6082,12 @@ int dsi_display_get_info(struct drm_connector *connector,
 	case DSI_OP_VIDEO_MODE:
 		info->curr_panel_mode = MSM_DISPLAY_VIDEO_MODE;
 		info->capabilities |= MSM_DISPLAY_CAP_VID_MODE;
-		if (display->panel->panel_mode_switch_enabled)
+		if (display->panel->panel_mode_switch_enabled) {
 			info->capabilities |= MSM_DISPLAY_CAP_CMD_MODE;
+			info->is_te_using_watchdog_timer =
+				display->panel->te_using_watchdog_timer |
+				display->sw_te_using_wd;
+		}
 		break;
 	case DSI_OP_CMD_MODE:
 		info->curr_panel_mode = MSM_DISPLAY_CMD_MODE;
@@ -6113,6 +6141,10 @@ static void dsi_display_adjust_mode_timing(struct dsi_display *display,
 	u64 new_htotal, new_vtotal, htotal, vtotal, old_htotal, div;
 	struct dsi_dyn_clk_caps *dyn_clk_caps;
 	u32 bits_per_symbol = 16, num_of_symbols = 7; /* For Cphy */
+
+	/* Constant FPS is not supported on command mode */
+	if (dsi_mode->panel_mode == DSI_OP_CMD_MODE)
+		return;
 
 	dyn_clk_caps = &(display->panel->dyn_clk_caps);
 	if (!dyn_clk_caps->maintain_const_fps)
@@ -6282,8 +6314,6 @@ int dsi_display_get_modes(struct dsi_display *display,
 
 	dyn_clk_caps = &(display->panel->dyn_clk_caps);
 
-	num_dfps_rates = !dfps_caps.dfps_support ? 1 : dfps_caps.dfps_list_len;
-
 	timing_mode_count = display->panel->num_timing_nodes;
 
 	for (mode_idx = 0; mode_idx < timing_mode_count; mode_idx++) {
@@ -6305,6 +6335,9 @@ int dsi_display_get_modes(struct dsi_display *display,
 		}
 
 		is_cmd_mode = (display_mode.panel_mode == DSI_OP_CMD_MODE);
+
+		num_dfps_rates = ((!dfps_caps.dfps_support ||
+				is_cmd_mode) ? 1 : dfps_caps.dfps_list_len);
 
 		is_split_link = host->split_link.split_link_enabled;
 		sublinks_count = host->split_link.num_sublinks;
@@ -6358,9 +6391,16 @@ int dsi_display_get_modes(struct dsi_display *display,
 		}
 		end = array_idx;
 		/*
-		 * if dynamic clk switch is supported then update all the bit
-		 * clk rates.
+		 * if POMS is enabled and boot up mode is video mode,
+		 * skip bit clk rates update for command mode,
+		 * else if dynamic clk switch is supported then update all
+		 * the bit clk rates.
 		 */
+
+		if (is_cmd_mode &&
+			(display->panel->panel_mode == DSI_OP_VIDEO_MODE))
+			continue;
+
 		_dsi_display_populate_bit_clks(display, start, end, &array_idx);
 	}
 
@@ -6546,6 +6586,13 @@ int dsi_display_validate_mode_change(struct dsi_display *display,
 					DSI_MODE_FLAG_VRR) &&
 					(!dyn_clk_caps->maintain_const_fps)) {
 					pr_err("dfps and dyn clk concurrent\n");
+					rc = -ENOTSUPP;
+					goto error;
+				}
+
+				if (cur_mode->timing.refresh_rate !=
+						adj_mode->timing.refresh_rate) {
+					pr_err("fps change along with dyn clk not supported\n");
 					rc = -ENOTSUPP;
 					goto error;
 				}

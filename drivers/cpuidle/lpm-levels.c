@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
  * Copyright (C) 2006-2007 Adam Belay <abelay@novell.com>
  * Copyright (C) 2009 Intel Corporation
  *
@@ -47,7 +47,11 @@
 #include <asm/cpuidle.h>
 #include "lpm-levels.h"
 #include <trace/events/power.h>
+#if defined(CONFIG_COMMON_CLK)
 #include "../clk/clk.h"
+#elif defined(CONFIG_COMMON_CLK_MSM)
+#include "../../drivers/clk/msm/clock.h"
+#endif /* CONFIG_COMMON_CLK */
 #define CREATE_TRACE_POINTS
 #include <trace/events/trace_msm_low_power.h>
 
@@ -1230,7 +1234,8 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 	if (cluster_configure(cluster, i, from_idle, predicted))
 		goto failed;
 
-	cluster->stats->sleep_time = start_time;
+	if (!IS_ERR_OR_NULL(cluster->stats))
+		cluster->stats->sleep_time = start_time;
 	cluster_prepare(cluster->parent, &cluster->num_children_in_sync, i,
 			from_idle, start_time);
 
@@ -1238,7 +1243,8 @@ static void cluster_prepare(struct lpm_cluster *cluster,
 	return;
 failed:
 	spin_unlock(&cluster->sync_lock);
-	cluster->stats->sleep_time = 0;
+	if (!IS_ERR_OR_NULL(cluster->stats))
+		cluster->stats->sleep_time = 0;
 }
 
 static void cluster_unprepare(struct lpm_cluster *cluster,
@@ -1277,7 +1283,7 @@ static void cluster_unprepare(struct lpm_cluster *cluster,
 	if (!first_cpu || cluster->last_level == cluster->default_level)
 		goto unlock_return;
 
-	if (cluster->stats->sleep_time)
+	if (!IS_ERR_OR_NULL(cluster->stats) && cluster->stats->sleep_time)
 		cluster->stats->sleep_time = end_time -
 			cluster->stats->sleep_time;
 	lpm_stats_cluster_exit(cluster->stats, cluster->last_level, success);
@@ -1389,7 +1395,7 @@ static bool psci_enter_sleep(struct lpm_cpu *cpu, int idx, bool from_idle)
 		if (cpu->bias)
 			biastimer_start(cpu->bias);
 		stop_critical_timings();
-		wfi();
+		cpu_do_idle();
 		start_critical_timings();
 		return 1;
 	}
@@ -1719,6 +1725,9 @@ static void register_cluster_lpm_stats(struct lpm_cluster *cl,
 
 	cl->stats = lpm_stats_config_level(cl->cluster_name, level_name,
 			cl->nlevels, parent ? parent->stats : NULL, NULL);
+	if (IS_ERR_OR_NULL(cl->stats))
+		pr_info("Cluster (%s) stats not registered\n",
+			cl->cluster_name);
 
 	kfree(level_name);
 

@@ -372,6 +372,7 @@ struct ep_pcie_dev_t {
 	u32                          dbi_base_reg;
 	u32                          slv_space_reg;
 	u32                          phy_status_reg;
+	u32			phy_status_bit_mask_bit;
 	u32                          phy_init_len;
 	u32			     mhi_soc_reset_offset;
 	struct ep_pcie_phy_info_t    *phy_init;
@@ -405,7 +406,6 @@ struct ep_pcie_dev_t {
 	bool                         config_mmio_init;
 	bool                         enumerated;
 	enum ep_pcie_link_status     link_status;
-	bool                         perst_deast;
 	bool                         power_on;
 	bool                         suspending;
 	bool                         l23_ready;
@@ -413,6 +413,8 @@ struct ep_pcie_dev_t {
 	struct ep_pcie_msi_config    msi_cfg;
 	bool                         no_notify;
 	bool                         client_ready;
+	atomic_t		     ep_pcie_dev_wake;
+	atomic_t                     perst_deast;
 
 	struct ep_pcie_register_event *event_reg;
 	struct work_struct	     handle_perst_work;
@@ -422,15 +424,6 @@ struct ep_pcie_dev_t {
 
 extern struct ep_pcie_dev_t ep_pcie_dev;
 extern struct ep_pcie_hw hw_drv;
-
-#if IS_ENABLED(CONFIG_QCOM_PCI_EDMA)
-int qcom_edma_init(struct device *dev);
-#else
-static inline int qcom_edma_init(struct device *dev)
-{
-	return 0;
-}
-#endif
 
 static inline void ep_pcie_write_mask(void __iomem *addr,
 				u32 clear_mask, u32 set_mask)
