@@ -514,6 +514,8 @@ static ssize_t dwc3_link_state_write(struct file *file,
 	unsigned long		flags;
 	enum dwc3_link_state	state = 0;
 	char			buf[32] = {};
+	u32			reg;
+	u8			speed;
 
 	if (atomic_read(&dwc->in_lpm)) {
 		seq_puts(s, "USB device is powered off\n");
@@ -604,6 +606,11 @@ static int dwc3_tx_request_queue_show(struct seq_file *s, void *unused)
 	struct dwc3		*dwc = dep->dwc;
 	unsigned long		flags;
 	u32			val;
+
+	if (atomic_read(&dwc->in_lpm)) {
+		seq_puts(s, "USB device is powered off\n");
+		return 0;
+	}
 
 	spin_lock_irqsave(&dwc->lock, flags);
 	val = dwc3_core_fifo_space(dep, DWC3_TXREQQ);

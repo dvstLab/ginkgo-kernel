@@ -27,6 +27,9 @@ static int etm4_set_mode_exclude(struct etmv4_drvdata *drvdata, bool exclude)
 
 	idx = config->addr_idx;
 
+	if (idx >= ETM_MAX_SINGLE_ADDR_CMP)
+		return -EINVAL;
+
 	/*
 	 * TRCACATRn.TYPE bit[1:0]: type of comparison
 	 * the trace unit performs
@@ -960,6 +963,12 @@ static ssize_t addr_range_show(struct device *dev,
 
 	spin_lock(&drvdata->spinlock);
 	idx = config->addr_idx;
+
+	if (idx >= ETM_MAX_SINGLE_ADDR_CMP) {
+		spin_unlock(&drvdata->spinlock);
+		return -EINVAL;
+	}
+
 	if (idx % 2 != 0) {
 		spin_unlock(&drvdata->spinlock);
 		return -EPERM;
@@ -995,6 +1004,12 @@ static ssize_t addr_range_store(struct device *dev,
 
 	spin_lock(&drvdata->spinlock);
 	idx = config->addr_idx;
+
+	if (idx >= ETM_MAX_SINGLE_ADDR_CMP) {
+		spin_unlock(&drvdata->spinlock);
+		return -EINVAL;
+	}
+
 	if (idx % 2 != 0) {
 		spin_unlock(&drvdata->spinlock);
 		return -EPERM;

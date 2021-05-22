@@ -52,6 +52,7 @@
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/processor.h>
+#include <asm/scs.h>
 #include <asm/smp_plat.h>
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
@@ -351,6 +352,9 @@ void cpu_die(void)
 {
 	unsigned int cpu = smp_processor_id();
 
+	/* Save the shadow stack pointer before exiting the idle task */
+	scs_save(current);
+
 	idle_task_exit();
 
 	local_irq_disable();
@@ -417,11 +421,6 @@ void __init smp_cpus_done(unsigned int max_cpus)
 void __init smp_prepare_boot_cpu(void)
 {
 	set_my_cpu_offset(per_cpu_offset(smp_processor_id()));
-	/*
-	 * Initialise the static keys early as they may be enabled by the
-	 * cpufeature code.
-	 */
-	jump_label_init();
 	cpuinfo_store_boot_cpu();
 }
 
@@ -462,9 +461,12 @@ static bool __init is_mpidr_duplicate(unsigned int cpu, u64 hwid)
 {
 	unsigned int i;
 
-	for (i = 1; (i < cpu) && (i < NR_CPUS); i++)
+	for (i = 0; (i <= cpu) && (i < NR_CPUS); i++) {
+		if (i == logical_bootcpu_id)
+			continue;
 		if (cpu_logical_map(i) == hwid)
 			return true;
+	}
 	return false;
 }
 
@@ -486,7 +488,7 @@ static int __init smp_cpu_setup(int cpu)
 }
 
 static bool bootcpu_valid __initdata;
-static unsigned int cpu_count = 1;
+static unsigned int cpu_count;
 
 #ifdef CONFIG_ACPI
 static struct acpi_madt_generic_interrupt cpu_madt_gicc[NR_CPUS];
@@ -523,7 +525,7 @@ acpi_map_gic_cpu_interface(struct acpi_madt_generic_interrupt *processor)
 	}
 
 	/* Check if GICC structure of boot CPU is available in the MADT */
-	if (cpu_logical_map(0) == hwid) {
+	if (cpu_logical_map(logical_bootcpu_id) == hwid) {
 		if (bootcpu_valid) {
 			pr_err("duplicate boot CPU MPIDR: 0x%llx in MADT\n",
 			       hwid);
@@ -531,7 +533,8 @@ acpi_map_gic_cpu_interface(struct acpi_madt_generic_interrupt *processor)
 		}
 		bootcpu_valid = true;
 		cpu_madt_gicc[0] = *processor;
-		early_map_cpu_to_node(0, acpi_numa_get_nid(0, hwid));
+		early_map_cpu_to_node(logical_bootcpu_id,
+					acpi_numa_get_nid(0, hwid));
 		return;
 	}
 
@@ -584,7 +587,8 @@ DEFINE_PER_CPU(bool, pending_ipi);
 /*
  * Enumerate the possible CPU set from the device tree and build the
  * cpu logical map array containing MPIDR values related to logical
- * cpus. Assumes that cpu_logical_map(0) has already been initialized.
+ * cpus. Assumes that cpu_logical_map(logical_bootcpu_id) has already
+ * been initialized.
  */
 static void __init of_parse_and_init_cpus(void)
 {
@@ -602,13 +606,7 @@ static void __init of_parse_and_init_cpus(void)
 			goto next;
 		}
 
-		/*
-		 * The numbering scheme requires that the boot CPU
-		 * must be assigned logical id 0. Record it so that
-		 * the logical map built from DT is validated and can
-		 * be used.
-		 */
-		if (hwid == cpu_logical_map(0)) {
+		if (hwid == cpu_logical_map(logical_bootcpu_id)) {
 			if (bootcpu_valid) {
 				pr_err("%pOF: duplicate boot cpu reg property in DT\n",
 					dn);
@@ -616,15 +614,17 @@ static void __init of_parse_and_init_cpus(void)
 			}
 
 			bootcpu_valid = true;
-			early_map_cpu_to_node(0, of_node_to_nid(dn));
+			early_map_cpu_to_node(logical_bootcpu_id,
+						of_node_to_nid(dn));
 
 			/*
-			 * cpu_logical_map has already been
-			 * initialized and the boot cpu doesn't need
-			 * the enable-method so continue without
-			 * incrementing cpu.
+			 * boot cpu's cpu_logical_map is already
+			 * initialized and the boot cpu doesn't need the
+			 * enable-method like secondary cpu's. Now, as we
+			 * can't assume logical boot cpu to be 0, we need
+			 * to loop through entire logical cpu map.
 			 */
-			continue;
+			goto next;
 		}
 
 		if (cpu_count >= NR_CPUS)
@@ -675,8 +675,12 @@ void __init smp_init_cpus(void)
 	 * with entries in cpu_logical_map while initializing the cpus.
 	 * If the cpu set-up fails, invalidate the cpu_logical_map entry.
 	 */
-	for (i = 1; i < nr_cpu_ids; i++) {
+	for (i = 0; i < nr_cpu_ids; i++) {
 		if (cpu_logical_map(i) != INVALID_HWID) {
+			if (cpu_logical_map(i) ==
+					cpu_logical_map(logical_bootcpu_id))
+				continue;
+
 			if (smp_cpu_setup(i))
 				cpu_logical_map(i) = INVALID_HWID;
 		}
@@ -978,10 +982,10 @@ void smp_send_stop(void)
 
 	/* Wait up to one second for other CPUs to stop */
 	timeout = USEC_PER_SEC;
-	while (num_other_online_cpus() && timeout--)
+	while (num_active_cpus() > 1 && timeout--)
 		udelay(1);
 
-	if (num_other_online_cpus())
+	if (num_active_cpus() > 1)
 		pr_warning("SMP: failed to stop secondary CPUs %*pbl\n",
 			   cpumask_pr_args(cpu_online_mask));
 }

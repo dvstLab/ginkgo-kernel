@@ -1803,9 +1803,10 @@ static inline long qcedev_ioctl(struct file *file,
 				handle->sha_ctxt.diglen);
 		mutex_unlock(&hash_access_lock);
 		if (copy_to_user((void __user *)arg, &qcedev_areq->sha_op_req,
-					sizeof(struct qcedev_sha_op_req)))
+					sizeof(struct qcedev_sha_op_req))) {
 			err = -EFAULT;
 			goto exit_free_qcedev_areq;
+		}
 		}
 		break;
 
@@ -1895,9 +1896,10 @@ static inline long qcedev_ioctl(struct file *file,
 				handle->sha_ctxt.diglen);
 		mutex_unlock(&hash_access_lock);
 		if (copy_to_user((void __user *)arg, &qcedev_areq->sha_op_req,
-					sizeof(struct qcedev_sha_op_req)))
+					sizeof(struct qcedev_sha_op_req))) {
 			err = -EFAULT;
 			goto exit_free_qcedev_areq;
+		}
 		}
 		break;
 
@@ -2297,7 +2299,7 @@ static int _qcedev_debug_init(void)
 
 	_debug_dent = debugfs_create_dir("qcedev", NULL);
 	if (IS_ERR(_debug_dent)) {
-		pr_err("qcedev debugfs_create_dir fail, error %ld\n",
+		pr_debug("qcedev debugfs_create_dir fail, error %ld\n",
 				PTR_ERR(_debug_dent));
 		return PTR_ERR(_debug_dent);
 	}
@@ -2307,7 +2309,7 @@ static int _qcedev_debug_init(void)
 	dent = debugfs_create_file(name, 0644, _debug_dent,
 			&_debug_qcedev, &_debug_stats_ops);
 	if (dent == NULL) {
-		pr_err("qcedev debugfs_create_file fail, error %ld\n",
+		pr_debug("qcedev debugfs_create_file fail, error %ld\n",
 				PTR_ERR(dent));
 		rc = PTR_ERR(dent);
 		goto err;
@@ -2320,11 +2322,7 @@ err:
 
 static int qcedev_init(void)
 {
-	int rc;
-
-	rc = _qcedev_debug_init();
-	if (rc)
-		return rc;
+	_qcedev_debug_init();
 	return platform_driver_register(&qcedev_plat_driver);
 }
 

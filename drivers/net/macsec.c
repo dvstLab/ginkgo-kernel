@@ -20,6 +20,7 @@
 #include <net/genetlink.h>
 #include <net/sock.h>
 #include <net/gro_cells.h>
+#include <linux/phy.h>
 #include <linux/if_arp.h>
 #include <linux/phy.h>
 
@@ -3541,6 +3542,9 @@ static int macsec_newlink(struct net *net, struct net_device *dev,
 			  struct netlink_ext_ack *extack)
 {
 	struct macsec_dev *macsec = macsec_priv(dev);
+	struct macsec_context ctx;
+	const struct macsec_ops *ops;
+	u8 icv_len = DEFAULT_ICV_LEN;
 	rx_handler_func_t *rx_handler;
 	u8 icv_len = DEFAULT_ICV_LEN;
 	struct net_device *real_dev;

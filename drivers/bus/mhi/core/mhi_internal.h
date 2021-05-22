@@ -252,6 +252,9 @@ extern struct bus_type mhi_bus_type;
 #define REMOTE_TICKS_TO_US(x) (div_u64((x) * 100ULL, \
 			       div_u64(mhi_cntrl->remote_timer_freq, 10000ULL)))
 
+/* Wait time to allow runtime framework to resume MHI in milliseconds */
+#define MHI_RESUME_TIME	(30000)
+
 struct mhi_event_ctxt {
 	u32 reserved : 8;
 	u32 intmodc : 8;
@@ -532,15 +535,15 @@ enum MHI_XFER_TYPE {
 #define MHI_DEV_WAKE_DB (127)
 #define MHI_MAX_MTU (0xffff)
 
-#define MHI_TIMESYNC_DB_SETUP(er_index) ((MHI_TIMESYNC_CHAN_DB << \
-	TIMESYNC_CFG_CHAN_DB_ID_SHIFT) & TIMESYNC_CFG_CHAN_DB_ID_MASK | \
-	(1 << TIMESYNC_CFG_ENABLED_SHIFT) & TIMESYNC_CFG_ENABLED_MASK | \
-	((er_index) << TIMESYNC_CFG_ER_ID_SHIFT) & TIMESYNC_CFG_ER_ID_MASK)
+#define MHI_TIMESYNC_DB_SETUP(er_index) (((MHI_TIMESYNC_CHAN_DB << \
+	TIMESYNC_CFG_CHAN_DB_ID_SHIFT) & TIMESYNC_CFG_CHAN_DB_ID_MASK) | \
+	((1 << TIMESYNC_CFG_ENABLED_SHIFT) & TIMESYNC_CFG_ENABLED_MASK) | \
+	(((er_index) << TIMESYNC_CFG_ER_ID_SHIFT) & TIMESYNC_CFG_ER_ID_MASK))
 
-#define MHI_BW_SCALE_SETUP(er_index) ((MHI_BW_SCALE_CHAN_DB << \
-	BW_SCALE_CFG_CHAN_DB_ID_SHIFT) & BW_SCALE_CFG_CHAN_DB_ID_MASK | \
-	(1 << BW_SCALE_CFG_ENABLED_SHIFT) & BW_SCALE_CFG_ENABLED_MASK | \
-	((er_index) << BW_SCALE_CFG_ER_ID_SHIFT) & BW_SCALE_CFG_ER_ID_MASK)
+#define MHI_BW_SCALE_SETUP(er_index) (((MHI_BW_SCALE_CHAN_DB << \
+	BW_SCALE_CFG_CHAN_DB_ID_SHIFT) & BW_SCALE_CFG_CHAN_DB_ID_MASK) | \
+	((1 << BW_SCALE_CFG_ENABLED_SHIFT) & BW_SCALE_CFG_ENABLED_MASK) | \
+	(((er_index) << BW_SCALE_CFG_ER_ID_SHIFT) & BW_SCALE_CFG_ER_ID_MASK))
 
 #define MHI_BW_SCALE_RESULT(status, seq) ((status & 0xF) << 8 | (seq & 0xFF))
 #define MHI_BW_SCALE_NACK 0xF
@@ -715,8 +718,6 @@ struct mhi_chan {
 struct tsync_node {
 	struct list_head node;
 	u32 sequence;
-	u32 int_sequence;
-	u64 local_time;
 	u64 remote_time;
 	struct mhi_device *mhi_dev;
 	void (*cb_func)(struct mhi_device *mhi_dev, u32 sequence,
@@ -726,7 +727,11 @@ struct tsync_node {
 struct mhi_timesync {
 	void __iomem *time_reg;
 	u32 int_sequence;
+	u64 local_time;
+	u64 remote_time;
 	bool db_support;
+	bool db_response_pending;
+	struct completion db_completion;
 	spinlock_t lock; /* list protection */
 	struct list_head head;
 };
@@ -747,16 +752,20 @@ struct mhi_bus {
 
 /* default MHI timeout */
 #define MHI_TIMEOUT_MS (1000)
+#define MHI_FORCE_WAKE_DELAY_US (100)
+
 extern struct mhi_bus mhi_bus;
 
 struct mhi_controller *find_mhi_controller_by_name(const char *name);
 
 /* debug fs related functions */
+int mhi_debugfs_mhi_regdump_show(struct seq_file *m, void *d);
 int mhi_debugfs_mhi_vote_show(struct seq_file *m, void *d);
 int mhi_debugfs_mhi_chan_show(struct seq_file *m, void *d);
 int mhi_debugfs_mhi_event_show(struct seq_file *m, void *d);
 int mhi_debugfs_mhi_states_show(struct seq_file *m, void *d);
 int mhi_debugfs_trigger_reset(void *data, u64 val);
+int mhi_debugfs_trigger_soc_reset(void *data, u64 val);
 
 void mhi_deinit_debugfs(struct mhi_controller *mhi_cntrl);
 void mhi_init_debugfs(struct mhi_controller *mhi_cntrl);
@@ -785,7 +794,9 @@ int mhi_process_data_event_ring(struct mhi_controller *mhi_cntrl,
 				struct mhi_event *mhi_event, u32 event_quota);
 int mhi_process_ctrl_ev_ring(struct mhi_controller *mhi_cntrl,
 			     struct mhi_event *mhi_event, u32 event_quota);
-int mhi_process_tsync_event_ring(struct mhi_controller *mhi_cntrl,
+int mhi_process_tsync_ev_ring(struct mhi_controller *mhi_cntrl,
+			      struct mhi_event *mhi_event, u32 event_quota);
+int mhi_process_bw_scale_ev_ring(struct mhi_controller *mhi_cntrl,
 				 struct mhi_event *mhi_event, u32 event_quota);
 int mhi_process_bw_scale_ev_ring(struct mhi_controller *mhi_cntrl,
 				 struct mhi_event *mhi_event, u32 event_quota);
@@ -916,6 +927,7 @@ int mhi_prepare_channel(struct mhi_controller *mhi_cntrl,
 			struct mhi_chan *mhi_chan);
 void mhi_reset_reg_write_q(struct mhi_controller *mhi_cntrl);
 void mhi_force_reg_write(struct mhi_controller *mhi_cntrl);
+void mhi_perform_soc_reset(struct mhi_controller *mhi_cntrl);
 
 /* isr handlers */
 irqreturn_t mhi_msi_handlr(int irq_number, void *dev);
