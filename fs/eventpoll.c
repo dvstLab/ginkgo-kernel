@@ -1399,8 +1399,14 @@ static int ep_create_wakeup_source(struct epitem *epi)
 			return -ENOMEM;
 	}
 
+<<<<<<< HEAD
 	name = epi->ffd.file->f_path.dentry->d_name.name;
 	ws = wakeup_source_register(NULL, name);
+=======
+	take_dentry_name_snapshot(&n, epi->ffd.file->f_path.dentry);
+	ws = wakeup_source_register(NULL, n.name);
+	release_dentry_name_snapshot(&n);
+>>>>>>> f564231bd7564d7c963d90a83c2887683b7f5a2f
 
 	if (!ws)
 		return -ENOMEM;
